@@ -1,0 +1,162 @@
+name: GUI AES-256-GCM Test Release
+
+on:
+  push:
+    branches:
+      - test-build/gui-aes256-20260824
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gui-aes256-test-release
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  android-arm64:
+    runs-on: ubuntu-latest
+    env:
+      TARGET: aarch64-linux-android
+      ARCH: aarch64
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: oracle
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 12.0
+          packages: 'build-tools;34.0.0 ndk;26.0.10792818 platform-tools platforms;android-34'
+
+      - name: Setup Android Environment
+        run: |
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/ndk/26.0.10792818/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/26.0.10792818/" >> "$GITHUB_ENV"
+
+      - name: Prepare build environment
+        uses: ./.github/actions/prepare-build
+        with:
+          target: ${{ env.TARGET }}
+          gui: false
+          pnpm: true
+          pnpm-build-filter: ''
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ''
+          shared-key: gui-registry
+          cache-targets: 'false'
+
+      - name: Build Android APK
+        run: |
+          cd easytier-gui
+          pnpm tauri android build --apk --target "$ARCH" --split-per-abi
+
+      - name: Collect Android APK
+        run: |
+          mkdir -p artifacts
+          find easytier-gui/src-tauri/gen/android/app/build/outputs/apk -type f -path '*/release/*.apk' -exec cp {} artifacts/ \;
+          test -n "$(find artifacts -maxdepth 1 -type f -name '*.apk' -print -quit)"
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: easytier-test-android-aarch64
+          path: artifacts/*.apk
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            artifact: macos-aarch64
+          - target: x86_64-apple-darwin
+            artifact: macos-x86_64
+    runs-on: macos-latest
+    env:
+      TARGET: ${{ matrix.target }}
+      GUI_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare build environment
+        uses: ./.github/actions/prepare-build
+        with:
+          target: ${{ matrix.target }}
+          gui: true
+          pnpm: true
+          pnpm-build-filter: ''
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ''
+          shared-key: gui-registry
+          cache-targets: 'false'
+
+      - name: Build unsigned macOS GUI
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: ./easytier-gui
+          args: --verbose --target ${{ matrix.target }}
+
+      - name: Collect macOS DMG
+        run: |
+          mkdir -p artifacts
+          find "./target/${GUI_TARGET}/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -exec cp {} artifacts/ \;
+          test -n "$(find artifacts -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: easytier-test-${{ matrix.artifact }}
+          path: artifacts/*.dmg
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [android-arm64, macos]
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: easytier-test-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          ls -lh release-assets
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Publish prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.6.4-gui-aes256-test.1
+          name: v2.6.4 GUI AES-256-GCM test 1
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          draft: false
+          fail_on_unmatched_files: true
+          body: |
+            Test build for PR #74: GUI encryption algorithm selection.
+
+            Included test packages:
+            - Android arm64 APK
+            - macOS Apple Silicon DMG
+            - macOS Intel DMG
+
+            Please verify that Advanced Settings exposes aes-gcm, aes-256-gcm, chacha20 and xor, and that selecting aes-256-gcm produces `encryption_algorithm = "aes-256-gcm"` in the generated configuration.
+          files: |
+            release-assets/*
