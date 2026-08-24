@@ -237,10 +237,13 @@ const SelectButtonStub = defineComponent({
   props: {
     modelValue: String,
     options: Array,
+    disabled: Boolean,
   },
   emits: ['update:modelValue'],
-  setup(props, { emit }) {
+  setup(props, { attrs, emit }) {
     return () => h('select', {
+      ...attrs,
+      disabled: props.disabled,
       value: props.modelValue,
       'data-stub': 'select-button',
       onChange: (event: Event) => emit('update:modelValue', (event.target as HTMLSelectElement).value),
@@ -314,6 +317,7 @@ function makeConfig(): NetworkConfig {
     dev_name: 'tun-test',
     mtu: 1280,
     instance_recv_bps_limit: '9007199254740993',
+    encryption_algorithm: 'aes-256-gcm',
     enable_relay_network_whitelist: true,
     relay_network_whitelist: ['network-a'],
     enable_manual_routes: true,
@@ -389,6 +393,7 @@ describe('Config.vue network config projection', () => {
     expect(input(wrapper, '#use_smoltcp').checked).toBe(true)
     expect(input(wrapper, '#disable_ipv6').checked).toBe(true)
     expect(input(wrapper, '#no_tun').checked).toBe(true)
+    expect(wrapper.find<HTMLSelectElement>('#encryption_algorithm').element.value).toBe('aes-256-gcm')
 
     expect(input(wrapper, '#hostname').value).toBe('host-a')
     expect(input(wrapper, '#subnet-proxy').value).toBe('10.10.0.0/16,172.16.1.0/24')
@@ -403,7 +408,7 @@ describe('Config.vue network config projection', () => {
     expect(input(wrapper, 'input[data-add-label="add_listener_url"]').value).toBe('tcp://0.0.0.0:12010')
     expect(input(wrapper, 'input[data-add-label="add_mapped_listener"]').value).toBe('tcp://127.0.0.1:22000')
 
-    expect(wrapper.find<HTMLSelectElement>('select[data-stub="select-button"]').element.value).toBe('udp')
+    expect(wrapper.findAll<HTMLSelectElement>('select[data-stub="select-button"]')[1].element.value).toBe('udp')
     expect(input(wrapper, 'input[placeholder="port_forwards_bind_addr"]').value).toBe('0.0.0.0')
     expect(input(wrapper, 'input[placeholder="port_forwards_dst_addr"]').value).toBe('10.0.0.2')
     expect(wrapper.findComponent(AclManagerStub).props('modelValue')).toStrictEqual(curNetwork.acl)
@@ -420,6 +425,7 @@ describe('Config.vue network config projection', () => {
     await setInput(wrapper, '#initial_nodes', ' tcp://peer-x:11010, , udp://peer-y:11010 ')
     await wrapper.find('#no_tun').setValue(false)
     await wrapper.find('#disable_ipv6').setValue(false)
+    await wrapper.find('#encryption_algorithm').setValue('chacha20')
     await setInput(wrapper, '#hostname', 'host-edited')
     await setInput(wrapper, '#subnet-proxy', '10.7.0.0/16,172.17.0.0/16')
     await setInput(wrapper, 'input[placeholder="vpn_portal_client_network"]', '10.200.0.0')
@@ -432,7 +438,7 @@ describe('Config.vue network config projection', () => {
     await setInput(wrapper, '#socks5_port', '1089')
     await setInput(wrapper, '#exit_nodes', 'exit-edited')
     await setInput(wrapper, 'input[data-add-label="add_mapped_listener"]', 'tcp://127.0.0.1:23000')
-    await wrapper.find('select[data-stub="select-button"]').setValue('tcp')
+    await wrapper.findAll('select[data-stub="select-button"]')[1].setValue('tcp')
     await setInput(wrapper, 'input[placeholder="port_forwards_bind_addr"]', '127.0.0.1')
     await setInput(wrapper, 'input[placeholder="port_forwards_dst_addr"]', '10.9.0.2')
 
@@ -448,6 +454,7 @@ describe('Config.vue network config projection', () => {
       peer_urls: ['tcp://peer-x:11010', 'udp://peer-y:11010'],
       no_tun: false,
       disable_ipv6: false,
+      encryption_algorithm: 'chacha20',
       hostname: 'host-edited',
       proxy_cidrs: ['10.7.0.0/16', '172.17.0.0/16'],
       vpn_portal_client_network_addr: '10.200.0.0',
@@ -478,6 +485,7 @@ describe('Config.vue network config projection', () => {
       listener_urls: ['tcp://0.0.0.0:13010'],
       mtu: 1260,
       instance_recv_bps_limit: '9007199254740993',
+      encryption_algorithm: 'chacha20',
       port_forwards: [{
         proto: 'tcp',
         bind_ip: '127.0.0.1',
@@ -486,6 +494,27 @@ describe('Config.vue network config projection', () => {
         dst_port: 9090,
       }],
     })
+  })
+
+  it('shows the core default without rewriting legacy configs until the user selects an algorithm', async () => {
+    const config = makeConfig()
+    config.encryption_algorithm = undefined
+
+    const { curNetwork, wrapper } = mountConfig(config)
+    await nextTick()
+
+    const selector = wrapper.find<HTMLSelectElement>('#encryption_algorithm')
+    expect(selector.element.value).toBe('aes-gcm')
+    expect(curNetwork.encryption_algorithm).toBeUndefined()
+    expect((toBackendNetworkConfig(curNetwork) as Record<string, unknown>).encryption_algorithm).toBeUndefined()
+
+    await selector.setValue('aes-256-gcm')
+    expect(curNetwork.encryption_algorithm).toBe('aes-256-gcm')
+    expect((toBackendNetworkConfig(curNetwork) as Record<string, unknown>).encryption_algorithm).toBe('aes-256-gcm')
+
+    await wrapper.find('#disable_encryption').setValue(true)
+    await nextTick()
+    expect(selector.element.disabled).toBe(true)
   })
 
   it('round-trips every visible boolean config control into backend JSON', async () => {
