@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - test-build/gui-aes256-20260824
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
@@ -145,7 +149,7 @@ jobs:
         with:
           tag_name: v2.6.4-gui-aes256-test.1
           name: v2.6.4 GUI AES-256-GCM test 1
-          target_commitish: ${{ github.sha }}
+          target_commitish: ${{ github.event.pull_request.head.sha || github.sha }}
           prerelease: true
           draft: false
           fail_on_unmatched_files: true
