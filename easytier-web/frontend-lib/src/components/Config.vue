@@ -28,6 +28,14 @@ const curNetwork = defineModel('curNetwork', {
 
 const { t } = useI18n()
 
+const encryptionAlgorithmOptions = ['aes-gcm', 'aes-256-gcm', 'chacha20', 'xor']
+const encryptionAlgorithm = computed<string>({
+  get: () => curNetwork.value.encryption_algorithm || 'aes-gcm',
+  set: (value) => {
+    curNetwork.value.encryption_algorithm = value
+  },
+})
+
 const protos: { [proto: string]: number } = {
   tcp: 11010,
   udp: 11010,
@@ -272,6 +280,19 @@ const instanceRecvBpsLimitInput = computed<string>({
                     </div>
 
                   </div>
+                </div>
+              </div>
+
+              <div class="flex flex-row gap-x-9 flex-wrap">
+                <div class="flex flex-col gap-2 basis-5/12 grow">
+                  <div class="flex">
+                    <label for="encryption_algorithm">{{ t('encryption_algorithm') }}</label>
+                    <span class="pi pi-question-circle ml-2 self-center"
+                      v-tooltip="t('encryption_algorithm_help')"></span>
+                  </div>
+                  <SelectButton id="encryption_algorithm" v-model="encryptionAlgorithm"
+                    :options="encryptionAlgorithmOptions" :allow-empty="false"
+                    :disabled="curNetwork.disable_encryption" aria-describedby="encryption_algorithm-help" />
                 </div>
               </div>
 

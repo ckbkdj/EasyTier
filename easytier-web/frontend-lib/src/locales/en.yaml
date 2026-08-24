@@ -152,6 +152,8 @@ proxy_forward_by_system_help: Forward packet to proxy networks via system kernel
 
 disable_encryption: Disable Encryption
 disable_encryption_help: Disable encryption for peers communication. Encryption is enabled by default, this option must be same with peers.
+encryption_algorithm: Encryption Algorithm
+encryption_algorithm_help: Select the encryption algorithm used for peer communication. The default is aes-gcm; choose aes-256-gcm for AES-256-GCM. This option has no effect when encryption is disabled.
 
 disable_tcp_hole_punching: Disable TCP Hole Punching
 disable_tcp_hole_punching_help: Disable tcp hole punching
