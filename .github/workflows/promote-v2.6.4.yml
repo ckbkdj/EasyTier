@@ -1,0 +1,80 @@
+name: Promote v2.6.4 Release
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-v2.6.4-release
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download validated test artifacts
+        uses: actions/download-artifact@v5
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 32692549785
+          pattern: easytier-test-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify expected assets
+        run: |
+          set -euo pipefail
+          test -f release-assets/app-arm64-release.apk
+          test -f release-assets/easytier-gui_2.6.4_aarch64.dmg
+          test -f release-assets/easytier-gui_2.6.4_x64.dmg
+          ls -lh release-assets
+
+      - name: Generate checksums
+        run: |
+          cd release-assets
+          sha256sum app-arm64-release.apk easytier-gui_2.6.4_aarch64.dmg easytier-gui_2.6.4_x64.dmg > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish v2.6.4
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.6.4
+          name: EasyTier v2.6.4
+          target_commitish: 42613778256b1b05871afeced2a33207d8f950c8
+          prerelease: false
+          draft: false
+          make_latest: true
+          fail_on_unmatched_files: true
+          body: |
+            ## EasyTier v2.6.4
+
+            This release adds encryption algorithm selection to the shared EasyTier GUI used by Android and macOS.
+
+            ### Added
+            - `aes-gcm` (default)
+            - `aes-256-gcm`
+            - `chacha20`
+            - `xor`
+            - Chinese and English UI descriptions
+            - Legacy config compatibility: unset algorithm still behaves as `aes-gcm`
+            - Algorithm selector is disabled when encryption itself is disabled
+
+            ### Packages
+            - Android ARM64 APK
+            - macOS Apple Silicon DMG
+            - macOS Intel DMG
+
+            The attached binaries are the same validated artifacts produced by the successful GUI AES-256-GCM test workflow and promoted after PR #74 was merged into `main`.
+
+            Note: the macOS DMGs in this release are unsigned test-promoted builds, so macOS may display a Gatekeeper warning on first launch.
+          files: |
+            release-assets/app-arm64-release.apk
+            release-assets/easytier-gui_2.6.4_aarch64.dmg
+            release-assets/easytier-gui_2.6.4_x64.dmg
+            release-assets/SHA256SUMS.txt
