@@ -1,0 +1,172 @@
+name: Publish OpenWrt IPv6 UDP Fix - multiarch
+
+on:
+  push:
+    branches:
+      - fix/ipv6-udp-reply-source
+    paths:
+      - .github/workflows/publish-openwrt-ipv6fix-multiarch.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: v2.6.4-openwrt-ipv6fix.2
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            archive_arch: x86_64
+            build_mode: build
+            features: jemalloc
+            web: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            archive_arch: aarch64
+            build_mode: build
+            features: mimalloc
+            web: true
+          - target: armv7-unknown-linux-musleabi
+            os: ubuntu-24.04
+            archive_arch: armv7
+            build_mode: zigbuild
+            features: jemalloc
+            web: true
+          - target: arm-unknown-linux-musleabi
+            os: ubuntu-24.04
+            archive_arch: arm
+            build_mode: zigbuild
+            features: jemalloc
+            web: true
+          - target: mips-unknown-linux-musl
+            os: ubuntu-24.04
+            archive_arch: mips
+            build_mode: mips
+            features: jemalloc
+            web: false
+          - target: mipsel-unknown-linux-musl
+            os: ubuntu-24.04
+            archive_arch: mipsel
+            build_mode: mips
+            features: jemalloc
+            web: false
+
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      ARCHIVE_ARCH: ${{ matrix.archive_arch }}
+
+    steps:
+      - name: Checkout fix branch
+        uses: actions/checkout@v5
+        with:
+          ref: fix/ipv6-udp-reply-source
+          fetch-depth: 0
+
+      - name: Prepare build environment
+        uses: ./.github/actions/prepare-build
+        with:
+          target: ${{ matrix.target }}
+          gui: false
+          pnpm: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "openwrt-ipv6fix-v2"
+          shared-key: ${{ matrix.archive_arch }}
+          cache-targets: "false"
+
+      - uses: mlugg/setup-zig@v2
+        if: matrix.build_mode == 'zigbuild'
+        with:
+          version: 0.16.0
+          use-cache: true
+
+      - uses: taiki-e/install-action@v2
+        if: matrix.build_mode == 'zigbuild'
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build non-MIPS binaries
+        if: matrix.build_mode != 'mips'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BUILD='${{ matrix.build_mode }}'
+          FEATURES='${{ matrix.features }}'
+
+          cargo "$BUILD" --release --target "$TARGET" --package=easytier-web --features=embed
+          mv "target/$TARGET/release/easytier-web" "target/$TARGET/release/easytier-web-embed"
+          cargo "$BUILD" --release --target "$TARGET" --features="$FEATURES"
+
+      - name: Build MIPS binaries
+        if: matrix.build_mode == 'mips'
+        env:
+          RUSTC_BOOTSTRAP: 1
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cargo build -r --target "$TARGET" -Z build-std=std,panic_abort --package=easytier --features=jemalloc
+
+      - name: Package release archive
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/package
+          cp "target/$TARGET/release/easytier-core" dist/package/
+          cp "target/$TARGET/release/easytier-cli" dist/package/
+          if [ '${{ matrix.web }}' = 'true' ]; then
+            cp "target/$TARGET/release/easytier-web" dist/package/ || true
+            cp "target/$TARGET/release/easytier-web-embed" dist/package/
+          fi
+          chmod 0755 dist/package/easytier-*
+          ARCHIVE="easytier-linux-${ARCHIVE_ARCH}-${RELEASE_TAG}.zip"
+          (cd dist/package && zip -9 "../$ARCHIVE" easytier-*)
+          sha256sum "dist/$ARCHIVE" > "dist/$ARCHIVE.sha256"
+
+      - name: Upload architecture artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: fixed-${{ matrix.archive_arch }}
+          path: |
+            dist/easytier-linux-${{ matrix.archive_arch }}-${{ env.RELEASE_TAG }}.zip
+            dist/easytier-linux-${{ matrix.archive_arch }}-${{ env.RELEASE_TAG }}.zip.sha256
+
+  release:
+    runs-on: ubuntu-24.04
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    steps:
+      - name: Download all architecture artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -lah release-assets
+
+      - name: Publish multiarch fixed release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: fix/ipv6-udp-reply-source
+          name: EasyTier v2.6.4 OpenWrt IPv6 UDP Fix 2
+          prerelease: true
+          body: |
+            Multi-architecture OpenWrt-oriented test release based on EasyTier v2.6.4.
+
+            Fixes wildcard IPv6 UDP/WireGuard listener replies selecting a different local IPv6 source address from the address that received the packet on multi-address routers/CPEs.
+
+            Architectures: aarch64, x86_64, arm, armv7, mips, mipsel.
+            Source branch: `fix/ipv6-udp-reply-source`.
+          files: |
+            release-assets/*.zip
+            release-assets/*.sha256
