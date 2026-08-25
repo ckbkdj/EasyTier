@@ -22,7 +22,9 @@ use crate::{
 use super::{
     MAX_UDP_SESSION_DATAGRAM_SIZE, UDP_SESSION_QUEUE_CAPACITY,
     packet::{new_data_packet, udp_session_payload_len},
-    virtual_socket::{PreferredIpv6Source, UdpBindOptions, UdpSocketRecvMeta, VirtualUdpSocket},
+    virtual_socket::{
+        PreferredIpv6Source, UdpBindOptions, UdpSocketRecvMeta, UdpSocketSendMeta, VirtualUdpSocket,
+    },
 };
 
 #[derive(Debug)]
@@ -445,6 +447,7 @@ impl UdpSession {
         socket: Arc<S>,
         local_addr: SocketAddr,
         peer_addr: SocketAddr,
+        send_meta: UdpSocketSendMeta,
         kind: UdpSessionKind,
         codec: UdpSessionCodec,
         rings: UdpSessionRingParts,
@@ -460,6 +463,7 @@ impl UdpSession {
         let send_task = tokio::spawn(forward_udp_session_to_socket(
             socket,
             peer_addr,
+            send_meta,
             codec,
             rings.session_send_rx,
             close.clone(),
@@ -695,6 +699,7 @@ pub(super) enum UdpSessionEnqueuePolicy {
 async fn forward_udp_session_to_socket<S>(
     socket: Arc<S>,
     peer_addr: SocketAddr,
+    send_meta: UdpSocketSendMeta,
     codec: UdpSessionCodec,
     mut outgoing: RingSocketReceiver<UdpSessionOutbound>,
     close: UdpSessionClose,
@@ -747,7 +752,10 @@ async fn forward_udp_session_to_socket<S>(
                 (datagram, None)
             }
         };
-        match socket.send_to(&datagram, peer_addr).await {
+        match socket
+            .send_to_with_meta(&datagram, peer_addr, send_meta)
+            .await
+        {
             Ok(_) => {
                 if let Some((completion, payload_len)) = completion {
                     let _ = completion.send(Ok(payload_len));
@@ -838,6 +846,7 @@ mod tests {
                 socket.clone(),
                 local_addr,
                 peer_addr,
+                UdpSocketSendMeta::default(),
                 kind,
                 UdpSessionCodec::Identity,
                 rings,
