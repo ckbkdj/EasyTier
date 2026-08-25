@@ -1,0 +1,50 @@
+name: Apply IPv6 UDP reply-source fix
+
+on:
+  push:
+    branches:
+      - fix/ipv6-udp-reply-source
+    paths:
+      - patches/ipv6-udp-reply-source.patch
+      - .github/workflows/apply-ipv6-udp-reply-source.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-check:
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[applied ipv6-udp-fix]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/ipv6-udp-reply-source
+          fetch-depth: 0
+
+      - name: Apply source patch
+        run: |
+          git apply --check patches/ipv6-udp-reply-source.patch
+          git apply patches/ipv6-udp-reply-source.patch
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.95'
+          components: rustfmt
+
+      - name: Format changed Rust files
+        run: cargo fmt --all
+
+      - name: Check core and CLI
+        run: cargo check -p easytier-core -p easytier
+
+      - name: Commit applied source fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add easytier-core/src/socket/udp/layer.rs easytier-core/src/socket/udp/session.rs
+          git diff --cached --check
+          git commit -m "fix: preserve UDP listener destination address [applied ipv6-udp-fix]"
+          git push origin HEAD:fix/ipv6-udp-reply-source
