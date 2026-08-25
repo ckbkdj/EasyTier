@@ -1,0 +1,65 @@
+name: Build IPv6 UDP Fix - Linux aarch64
+
+on:
+  push:
+    branches:
+      - fix/ipv6-udp-reply-source
+    paths:
+      - easytier-core/src/socket/udp/**
+      - easytier/src/socket/**
+      - .github/workflows/build-ipv6-udp-fix-aarch64.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-aarch64:
+    runs-on: ubuntu-24.04-arm
+    env:
+      TARGET: aarch64-unknown-linux-musl
+    steps:
+      - name: Checkout fix branch
+        uses: actions/checkout@v5
+        with:
+          ref: fix/ipv6-udp-reply-source
+
+      - name: Prepare build environment
+        uses: ./.github/actions/prepare-build
+        with:
+          target: aarch64-unknown-linux-musl
+          gui: 'false'
+          pnpm: 'false'
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "ipv6-udp-fix"
+          shared-key: "linux-aarch64"
+          cache-targets: "false"
+
+      - name: Build EasyTier core and CLI
+        run: |
+          cargo build --release \
+            --target "$TARGET" \
+            --package easytier \
+            --features mimalloc \
+            --bin easytier-core \
+            --bin easytier-cli
+
+      - name: Verify binaries
+        run: |
+          file "target/$TARGET/release/easytier-core"
+          file "target/$TARGET/release/easytier-cli"
+          mkdir -p artifacts
+          cp "target/$TARGET/release/easytier-core" artifacts/
+          cp "target/$TARGET/release/easytier-cli" artifacts/
+          sha256sum artifacts/easytier-core artifacts/easytier-cli | tee artifacts/SHA256SUMS
+
+      - name: Upload test binaries
+        uses: actions/upload-artifact@v5
+        with:
+          name: easytier-ipv6-udp-fix-linux-aarch64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
