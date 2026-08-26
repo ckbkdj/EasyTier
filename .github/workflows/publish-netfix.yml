@@ -15,9 +15,17 @@ jobs:
     timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
-      VERSION: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Set release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#releases/}"
+          [[ "$version" == v2.6.4-netfix.* ]]
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "Publishing $version from $GITHUB_SHA"
 
       - name: Resolve and wait for build workflows
         id: runs
@@ -101,9 +109,7 @@ jobs:
 
           echo 'Release assets:'
           ls -lh zipped_assets
-
           test -n "$(find zipped_assets -maxdepth 1 -type f -print -quit)"
-          test -n "$(find zipped_assets -maxdepth 1 -type f -name '*android*' -o -name '*.apk' -print -quit)" || true
 
       - name: Publish GitHub release
         shell: bash
