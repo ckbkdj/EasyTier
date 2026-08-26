@@ -1,0 +1,78 @@
+name: Patch netfix UDP tests
+
+on:
+  push:
+    branches:
+      - fix/ipv6-udp-reply-source
+    paths:
+      - .github/workflows/patch-netfix-tests.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/ipv6-udp-reply-source
+          fetch-depth: 0
+
+      - name: Update UDP test call sites for metadata arguments
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('easytier-core/src/socket/udp/tests.rs')
+          text = path.read_text()
+
+          old = '''    UdpSession::new(
+                  socket,
+                  local_addr,
+                  key.peer_addr,
+                  UdpSessionKind::EasyTierMux,'''
+          new = '''    UdpSession::new(
+                  socket,
+                  local_addr,
+                  key.peer_addr,
+                  UdpSocketSendMeta::default(),
+                  UdpSessionKind::EasyTierMux,'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one UdpSession::new test call, found {text.count(old)}')
+          text = text.replace(old, new)
+
+          targets = [
+              '''        &new_syn_packet(conn_id, magic),
+                  shutdown_rx,''',
+              '''        &new_syn_packet(conn_id, magic),
+                  session_shutdown_rx,''',
+          ]
+          replacements = [
+              '''        &new_syn_packet(conn_id, magic),
+                  UdpSocketRecvMeta::default(),
+                  shutdown_rx,''',
+              '''        &new_syn_packet(conn_id, magic),
+                  UdpSocketRecvMeta::default(),
+                  session_shutdown_rx,''',
+          ]
+          # shutdown_rx occurs in two mux tests; replace both. session_shutdown_rx occurs once.
+          if text.count(targets[0]) != 2:
+              raise SystemExit(f'expected two shutdown_rx mux calls, found {text.count(targets[0])}')
+          text = text.replace(targets[0], replacements[0])
+          if text.count(targets[1]) != 1:
+              raise SystemExit(f'expected one session_shutdown_rx mux call, found {text.count(targets[1])}')
+          text = text.replace(targets[1], replacements[1])
+
+          path.write_text(text)
+
+      - name: Commit test fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add easytier-core/src/socket/udp/tests.rs
+          git diff --cached --check
+          git commit -m 'test: pass UDP metadata to netfix session helpers'
+          git push origin HEAD:fix/ipv6-udp-reply-source
