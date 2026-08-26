@@ -24,18 +24,17 @@ jobs:
     # continue-on-error: true # Uncomment once integration is finished
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    # Map a step output to a job output
     outputs:
       should_skip: ${{ steps.skip_check.outputs.should_skip == 'true' && !startsWith(github.ref_name, 'releases/') }}
     steps:
       - id: skip_check
         uses: fkirc/skip-duplicate-actions@v5
         with:
-          # All of these options are optional, so you can remove them if you are happy with the defaults
           concurrent_skipping: 'same_content_newer'
           skip_after_successful_duplicate: 'true'
           cancel_others: 'true'
           paths: '["Cargo.toml", "Cargo.lock", "easytier/**", "easytier-core/**", "easytier-gui/**", ".github/workflows/gui.yml", ".github/actions/**", "easytier-web/frontend-lib/**"]'
+
   build-gui:
     strategy:
       fail-fast: true
@@ -49,7 +48,6 @@ jobs:
             OS: ubuntu-24.04-arm
             GUI_TARGET: aarch64-unknown-linux-gnu
             ARTIFACT_NAME: linux-aarch64
-
           - TARGET: x86_64-apple-darwin
             OS: macos-latest
             GUI_TARGET: x86_64-apple-darwin
@@ -58,7 +56,6 @@ jobs:
             OS: macos-latest
             GUI_TARGET: aarch64-apple-darwin
             ARTIFACT_NAME: macos-aarch64
-
           - TARGET: x86_64-pc-windows-msvc
             OS: windows-latest
             GUI_TARGET: x86_64-pc-windows-msvc
@@ -80,7 +77,7 @@ jobs:
       GUI_TARGET: ${{ matrix.GUI_TARGET }}
       OSS_BUCKET: ${{ secrets.ALIYUN_OSS_BUCKET }}
     needs: pre_job
-    if: needs.pre_job.outputs.should_skip != 'true'    
+    if: needs.pre_job.outputs.should_skip != 'true'
     steps:
       - uses: actions/checkout@v5
 
@@ -99,8 +96,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          # The prefix cache key, this can be changed to start a new cache manually.
-          # default: "v0-rust"
           prefix-key: ""
           shared-key: "gui-registry"
           cache-targets: "false"
@@ -117,8 +112,9 @@ jobs:
               find "./easytier/third_party/${ARCH_DIR}" -maxdepth 1 -type f \( -name "*.dll" -o -name "*.sys" \) -exec cp {} ./easytier-gui/src-tauri/ \;
           fi
 
-      - name: Validate macOS signing secrets
-        if: ${{ contains(matrix.GUI_TARGET, 'darwin') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+      - name: Detect macOS signing availability
+        id: macos_signing
+        if: ${{ contains(matrix.GUI_TARGET, 'darwin') }}
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -134,19 +130,21 @@ jobs:
             fi
           done
           if (( ${#missing[@]} )); then
-            printf 'Missing macOS signing secret(s): %s\n' "${missing[*]}" >&2
-            exit 1
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            printf 'macOS signing unavailable; building unsigned DMG. Missing: %s\n' "${missing[*]}"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build GUI
-        if: ${{ matrix.GUI_TARGET != '' && (!contains(matrix.GUI_TARGET, 'darwin') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) }}
+        if: ${{ matrix.GUI_TARGET != '' && (!contains(matrix.GUI_TARGET, 'darwin') || steps.macos_signing.outputs.available != 'true') }}
         uses: tauri-apps/tauri-action@v0
         with:
           projectPath: ./easytier-gui
           args: --verbose --target ${{ matrix.GUI_TARGET }}
 
       - name: Build GUI (signed and notarized)
-        if: ${{ contains(matrix.GUI_TARGET, 'darwin') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ contains(matrix.GUI_TARGET, 'darwin') && steps.macos_signing.outputs.available == 'true' }}
         timeout-minutes: 60
         uses: tauri-apps/tauri-action@v0
         env:
@@ -161,7 +159,7 @@ jobs:
           args: --verbose --target ${{ matrix.GUI_TARGET }}
 
       - name: Notarize and staple macOS DMG
-        if: ${{ contains(matrix.GUI_TARGET, 'darwin') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ contains(matrix.GUI_TARGET, 'darwin') && steps.macos_signing.outputs.available == 'true' }}
         timeout-minutes: 45
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -169,13 +167,11 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-
           dmg_dir="./target/$GUI_TARGET/release/bundle/dmg"
           if [[ ! -d "$dmg_dir" ]]; then
             printf 'macOS DMG directory not found: %s\n' "$dmg_dir" >&2
             exit 1
           fi
-
           dmgs=()
           while IFS= read -r dmg; do
             dmgs+=("$dmg")
@@ -184,12 +180,10 @@ jobs:
             printf 'No macOS DMG found in %s\n' "$dmg_dir" >&2
             exit 1
           fi
-
           for dmg in "${dmgs[@]}"; do
             printf 'Verifying signed DMG: %s\n' "$dmg"
             codesign --verify --verbose=4 "$dmg"
             codesign -dv --verbose=4 "$dmg"
-
             printf 'Notarizing DMG: %s\n' "$dmg"
             xcrun notarytool submit "$dmg" \
               --apple-id "$APPLE_ID" \
@@ -197,7 +191,6 @@ jobs:
               --team-id "$APPLE_TEAM_ID" \
               --wait \
               --timeout 40m
-
             printf 'Stapling DMG: %s\n' "$dmg"
             xcrun stapler staple "$dmg"
             xcrun stapler validate "$dmg"
@@ -206,14 +199,11 @@ jobs:
       - name: Collect artifact
         run: |
           mkdir -p ./artifacts/objects/
-          
           if [[ $GITHUB_REF_TYPE =~ ^tag$ ]]; then
             TAG=$GITHUB_REF_NAME
           else
             TAG=$GITHUB_SHA
           fi
-
-          # copy gui bundle, gui is built without specific target
           if [[ $GUI_TARGET =~ windows ]]; then
               mv ./target/$GUI_TARGET/release/bundle/nsis/*.exe ./artifacts/objects/
           elif [[ $GUI_TARGET =~ darwin ]]; then
@@ -223,7 +213,6 @@ jobs:
               mv ./target/$GUI_TARGET/release/bundle/rpm/*.rpm ./artifacts/objects/
               mv ./target/$GUI_TARGET/release/bundle/appimage/*.AppImage ./artifacts/objects/
           fi
-
           mv ./artifacts/objects/* ./artifacts/
           rm -rf ./artifacts/objects/
 
