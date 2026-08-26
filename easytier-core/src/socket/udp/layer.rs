@@ -781,6 +781,7 @@ fn dispatch_classified_udp_datagram<S>(
     accept_permit.send(session);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_new_easy_tier_mux_connect<S>(
     socket: Arc<S>,
     sessions: Arc<UdpSessionRegistry>,
