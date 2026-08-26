@@ -552,6 +552,7 @@ where
         socket,
         local_addr,
         key.peer_addr,
+        UdpSocketSendMeta::default(),
         UdpSessionKind::EasyTierMux,
         UdpSessionCodec::EasyTierData {
             conn_id: key.conn_id,
@@ -1344,6 +1345,7 @@ async fn udp_session_layer_accepts_syn_and_sends_sack() {
         peer_addr,
         conn_id,
         &new_syn_packet(conn_id, magic),
+        UdpSocketRecvMeta::default(),
         shutdown_rx,
     );
 
@@ -1387,6 +1389,7 @@ async fn duplicate_syn_sack_send_failure_closes_existing_session() {
         peer_addr,
         conn_id,
         &new_syn_packet(conn_id, magic),
+        UdpSocketRecvMeta::default(),
         session_shutdown_rx,
     );
 
@@ -1424,6 +1427,7 @@ async fn full_accept_queue_does_not_block_udp_session_recv_loop() {
         peer_addr,
         conn_id,
         &new_syn_packet(conn_id, magic),
+        UdpSocketRecvMeta::default(),
         shutdown_rx,
     );
 
