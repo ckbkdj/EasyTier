@@ -21,3 +21,14 @@ operation transition.
 
 Host capability operations use a separate seam. They turn Host readiness into
 Rust task wakeups and do not share the caller-to-core broker state machine.
+
+## v2.6.4-netfix.1 validation scope
+
+The netfix release preserves the destination address received by wildcard UDP
+listeners and carries it into accepted UDP/WireGuard session reply metadata, so
+multi-address hosts reply from the same local address that received the packet.
+
+On mobile clients, selecting an `exit_nodes` entry also adds `0.0.0.0/0` to the
+VpnService route set. This makes ordinary IPv4 application traffic enter the
+EasyTier TUN while the EasyTier application itself remains excluded from its
+own VPN underlay.

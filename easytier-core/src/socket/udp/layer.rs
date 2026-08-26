@@ -160,6 +160,7 @@ where
             self.socket.clone(),
             local_addr,
             remote_addr,
+            UdpSocketSendMeta::default(),
             protocol.session_kind(),
             UdpSessionCodec::Identity,
             rings,
@@ -236,6 +237,7 @@ where
                     self.socket.clone(),
                     local_addr,
                     key.peer_addr,
+                    UdpSocketSendMeta::default(),
                     UdpSessionKind::EasyTierMux,
                     UdpSessionCodec::EasyTierData { conn_id },
                     rings,
@@ -594,6 +596,7 @@ where
             remote_addr,
             conn_id,
             &packet,
+            recv_meta,
             session_shutdown.subscribe(),
         ),
         EasyTierUdpPacketKind::Sack => {
@@ -686,6 +689,10 @@ fn dispatch_classified_udp_datagram<S>(
     S: VirtualUdpSocket,
 {
     let key = ClassifiedUdpSessionKey::new(protocol, remote_addr);
+    let send_meta = UdpSocketSendMeta {
+        src_ip: datagram.dst_ip,
+        src_ifindex: None,
+    };
     if let Some(entry) = classified_sessions.get(&key) {
         let dispatched = dispatch_payload_to_session(
             &entry.incoming,
@@ -764,6 +771,7 @@ fn dispatch_classified_udp_datagram<S>(
         socket,
         local_addr,
         remote_addr,
+        send_meta,
         protocol.session_kind(),
         UdpSessionCodec::Identity,
         rings,
@@ -773,6 +781,7 @@ fn dispatch_classified_udp_datagram<S>(
     accept_permit.send(session);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_new_easy_tier_mux_connect<S>(
     socket: Arc<S>,
     sessions: Arc<UdpSessionRegistry>,
@@ -780,6 +789,7 @@ pub(super) fn handle_new_easy_tier_mux_connect<S>(
     remote_addr: SocketAddr,
     conn_id: u32,
     packet: &ZCPacket,
+    recv_meta: UdpSocketRecvMeta,
     session_shutdown: watch::Receiver<bool>,
 ) -> bool
 where
@@ -799,10 +809,17 @@ where
     let magic = u64::from_le_bytes(payload[..8].try_into().unwrap());
     let key = UdpSessionKey::new(remote_addr, conn_id);
     let sack_packet = new_sack_packet(conn_id, magic).into_bytes();
+    let send_meta = UdpSocketSendMeta {
+        src_ip: recv_meta.dst_ip,
+        src_ifindex: None,
+    };
     if sessions.contains_key(&key) {
         let sessions = sessions.clone();
         tokio::spawn(async move {
-            if let Err(err) = socket.send_to(&sack_packet, remote_addr).await {
+            if let Err(err) = socket
+                .send_to_with_meta(&sack_packet, remote_addr, send_meta)
+                .await
+            {
                 tracing::debug!(?err, ?key, "udp resend sack packet error");
                 close_udp_session(&sessions, key);
             }
@@ -831,6 +848,7 @@ where
         socket.clone(),
         local_addr,
         key.peer_addr,
+        send_meta,
         UdpSessionKind::EasyTierMux,
         UdpSessionCodec::EasyTierData { conn_id },
         rings,
@@ -838,7 +856,10 @@ where
         session_shutdown,
     );
     tokio::spawn(async move {
-        if let Err(err) = socket.send_to(&sack_packet, remote_addr).await {
+        if let Err(err) = socket
+            .send_to_with_meta(&sack_packet, remote_addr, send_meta)
+            .await
+        {
             close_udp_session(&sessions, key);
             tracing::debug!(?err, ?key, "udp send sack packet error");
             return;
