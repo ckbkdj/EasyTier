@@ -88,7 +88,7 @@ async function doStopVpn(force = false) {
   }
   console.log('stop vpn')
   const stop_ret = await stop_vpn()
-  console.log('stop vpn', JSON.stringify((stop_ret)))
+  console.log('stop vpn', JSON.stringify(stop_ret))
   if (wasRunning) {
     await waitVpnStatus(false, 3)
   }
@@ -176,6 +176,12 @@ function getRoutesForVpn(routes: Route[] | undefined, node_config: NetworkTypes.
 
   for (const route of node_config.routes ?? []) {
     ret.push(route)
+  }
+
+  // Mobile VpnService only captures destinations explicitly listed as routes.
+  // Selecting an EasyTier exit node therefore requires a default IPv4 route.
+  if ((node_config.exit_nodes?.length ?? 0) > 0) {
+    ret.push('0.0.0.0/0')
   }
 
   if (node_config.enable_magic_dns) {
