@@ -1,0 +1,134 @@
+name: Publish Netfix Release
+
+on:
+  push:
+    branches:
+      - 'releases/v2.6.4-netfix.*'
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve and wait for build workflows
+        id: runs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          resolve_run() {
+            local workflow="$1"
+            local id=""
+            for _ in $(seq 1 60); do
+              id="$(gh run list \
+                --repo "$GITHUB_REPOSITORY" \
+                --workflow "$workflow" \
+                --branch "$GITHUB_REF_NAME" \
+                --commit "$GITHUB_SHA" \
+                --limit 10 \
+                --json databaseId,createdAt \
+                --jq 'sort_by(.createdAt) | reverse | .[0].databaseId // empty')"
+              if [[ -n "$id" ]]; then
+                echo "$id"
+                return 0
+              fi
+              sleep 10
+            done
+            echo "Timed out waiting for workflow: $workflow" >&2
+            return 1
+          }
+
+          core_run_id="$(resolve_run 'EasyTier Core')"
+          gui_run_id="$(resolve_run 'EasyTier GUI')"
+          mobile_run_id="$(resolve_run 'EasyTier Mobile')"
+
+          echo "Core run: $core_run_id"
+          echo "GUI run: $gui_run_id"
+          echo "Mobile run: $mobile_run_id"
+
+          gh run watch "$core_run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+          gh run watch "$gui_run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+          gh run watch "$mobile_run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+
+          echo "core_run_id=$core_run_id" >> "$GITHUB_OUTPUT"
+          echo "gui_run_id=$gui_run_id" >> "$GITHUB_OUTPUT"
+          echo "mobile_run_id=$mobile_run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download verified artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release_assets release_assets_nozip zipped_assets
+
+          gh run download "${{ steps.runs.outputs.core_run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir release_assets
+
+          gh run download "${{ steps.runs.outputs.gui_run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir release_assets_nozip/gui
+
+          gh run download "${{ steps.runs.outputs.mobile_run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir release_assets_nozip/mobile
+
+      - name: Assemble release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find release_assets_nozip -type f -exec cp -f {} zipped_assets/ \;
+
+          shopt -s nullglob
+          for dir in release_assets/*; do
+            [[ -d "$dir" ]] || continue
+            name="$(basename "$dir")"
+            if [[ "$name" == "Easytier-Magisk" ]]; then
+              (cd "$dir" && zip -r "$GITHUB_WORKSPACE/zipped_assets/${name}-${VERSION}.zip" .)
+            else
+              (cd release_assets && zip -r "../zipped_assets/${name}-${VERSION}.zip" "$name")
+            fi
+          done
+
+          echo 'Release assets:'
+          ls -lh zipped_assets
+
+          test -n "$(find zipped_assets -maxdepth 1 -type f -print -quit)"
+          test -n "$(find zipped_assets -maxdepth 1 -type f -name '*android*' -o -name '*.apk' -print -quit)" || true
+
+      - name: Publish GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<'EOF'
+          Network-fix build based on EasyTier 2.6.4.
+
+          Fixes:
+          - Preserve the destination IPv4/IPv6 address received by wildcard UDP listeners and use it as the reply source. This fixes UDP/WG listener failures on multi-address OpenWrt/Linux hosts.
+          - On mobile VPN clients, configuring `exit_nodes` now automatically installs `0.0.0.0/0` into the mobile VpnService route set, so Android mobile traffic can actually enter EasyTier and use the selected exit node.
+          - macOS CI falls back to an unsigned DMG when Apple signing/notarization credentials are unavailable; signed/notarized builds are still used when credentials exist.
+
+          Artifacts are published only after EasyTier Core, GUI and Mobile workflows for this exact release commit succeed.
+          EOF
+
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists" >&2
+            exit 1
+          fi
+
+          gh release create "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --latest \
+            --notes-file release-notes.md \
+            zipped_assets/*
